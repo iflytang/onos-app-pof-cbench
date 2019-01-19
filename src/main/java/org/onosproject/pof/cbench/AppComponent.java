@@ -108,9 +108,13 @@ public class AppComponent {
 
     private static final int PACKET_BUFFER = 50000;
 
-    private static final int BATCH_SIZE = 1000;
+    private static final int BATCH_SIZE = 5;
 
     private static final int AVERAGE_COUNT = 5;
+
+    boolean hasBegin = false;
+
+    boolean hasEnd = false;
 
     /**
      * PacketIn message handle queue
@@ -125,7 +129,9 @@ public class AppComponent {
 
 
     @Activate
-    protected void activate() {
+    protected void activate() throws InterruptedException {
+        log.info("Started");
+
         appId = coreService.registerApplication("org.onosproject.vn.pof.cbench");
 
         local = clusterService.getLocalNode().id();
@@ -153,24 +159,33 @@ public class AppComponent {
 
                 byte tableId = sendPofFlowTable(deviceId);
                 log.info("send flow table to device: {} with flow table id: {}", deviceId, tableId);
+//                long start = System.currentTimeMillis();
+//                Thread.sleep(1000);
+//                long end = System.currentTimeMillis();
+//                System.out.println(end - start + "ms");
+//                String srcIpv4 = "10.0.0.1";
+//                String dstIpv4 = "10.0.0.2";
+//                sendPofFlowEntry(deviceId, (byte) 0, 0, (short)2, dstIpv4);
+//                sendPofFlowEntry(deviceId, (byte) 0, 1, (short)1, srcIpv4);
             }
         }
 
-       /* executorService = Executors.newFixedThreadPool(2, Tools.groupedThreads("onos/cbench/pof/", "-%d", log));
+//        executorService = Executors.newFixedThreadPool(2, Tools.groupedThreads("onos/cbench/pof/", "-%d", log));
+        executorService = Executors.newSingleThreadExecutor(Tools.groupedThreads("onos/cbench/packetin/handler", "1", log));
 
-        executorService.submit(new FlowRuleInstaller(deviceIdList, AVERAGE_COUNT, BATCH_SIZE));
-        executorService.submit(() -> {
-            log.warn("Thread is submitted: {}", Thread.currentThread().getName());
-            while (true) {
-                if(Thread.currentThread().isInterrupted()) {
-                    return;
-                }
-            }
-        });
-        log.info("flow rule installer started: {}", executorService);*/
-
-
-        log.info("Started");
+//        executorService.submit(new FlowRuleInstaller(deviceIdList, AVERAGE_COUNT, BATCH_SIZE));
+//        executorService.submit(() -> {
+//            log.warn("Thread is submitted: {}", Thread.currentThread().getName());
+//            while (true) {
+//                if(Thread.currentThread().isInterrupted()) {
+//                    return;
+//                }
+//            }
+//        });
+        log.info("flow rule installer started: {}", executorService);
+//
+//
+//        log.info("Started");
     }
 
     @Deactivate
@@ -215,7 +230,7 @@ public class AppComponent {
         OFFlowTable ofFlowTable = new OFFlowTable();
         ofFlowTable.setTableId(tableId);
         ofFlowTable.setTableName("FirstEntryTable");
-        ofFlowTable.setMatchFieldNum((byte) 2);
+        ofFlowTable.setMatchFieldNum((byte) 1);
         ofFlowTable.setTableSize(64);
         ofFlowTable.setTableType(OFTableType.OF_MM_TABLE);
         ofFlowTable.setCommand(null);
@@ -238,7 +253,7 @@ public class AppComponent {
         return tableId;
     }
 
-    public long sendPofFlowEntry(DeviceId deviceId, byte tableId, int entryId, short outPort, String srcIpv4, String dstIpv4) {
+    public long sendPofFlowEntry(DeviceId deviceId, byte tableId, int entryId, short outPort, String srcIpv4,String dstIpv4) {
         /**
          * send flow entry: newFlowEntryId
          */
@@ -348,6 +363,41 @@ public class AppComponent {
                 return;
             }
 
+//            if (!hasBegin) {
+//                synchronized (this) {
+//                    if(!hasBegin) {
+//                        hasBegin = true;
+//                        hasEnd = false;
+//                        deviceIdList = new ArrayList<>();
+//                        for (Device device: deviceService.getAvailableDevices()) {
+//                            DeviceId deviceId = device.id();
+//                            deviceIdList.add(deviceId);
+//                        }
+//                        log.info("{} devices: {}", deviceIdList.size(), deviceIdList);
+//
+//                        executorService.execute(new FlowRuleInstaller(deviceIdList, AVERAGE_COUNT, BATCH_SIZE));
+//                        log.info("flow rule installer started: {}", executorService);
+//                    }
+//                }
+//            }
+
+//            deviceIdList = new ArrayList<>();
+//            for (Device device: deviceService.getAvailableDevices()) {
+//                DeviceId deviceId = device.id();
+//                deviceIdList.add(deviceId);
+//            }
+//            log.info("{} devices: {}", deviceIdList.size(), deviceIdList);
+//
+//            executorService.execute(new FlowRuleInstaller(deviceIdList, AVERAGE_COUNT, BATCH_SIZE));
+//            log.info("flow rule installer started: {}", executorService);
+//
+//            try {
+//                handleQueue.put(context);
+//            } catch (InterruptedException e) {
+//                Thread.currentThread().interrupt();
+//                log.warn("put packet to queue exception");
+//            }
+
             packetOut(context, (short)2);
 
             /*DeviceId deviceId = pkt.receivedFrom().deviceId();
@@ -369,7 +419,17 @@ public class AppComponent {
 
         actions.add(DefaultPofActions.output((short)0, (short)0, (short)0, outPort).action());
         context.treatmentBuilder().add(DefaultPofInstructions.applyActions(actions));
+//        for (int i=0;i<5;i++)
+//        {context.send();}
         context.send();
+
+
+
+//        DeviceId deviceid = context.inPacket().receivedFrom().deviceId();
+//        String srcIpv4 = "10.0.0.1";
+//        String dstIpv4 = "10.0.0.2";
+//        sendPofFlowEntry(deviceid, (byte) 0, 0, (short)2, srcIpv4, dstIpv4);
+//        sendPofFlowEntry(deviceid, (byte) 0, 1, (short)1, dstIpv4, srcIpv4);
     }
 
     private class FlowRuleInstaller implements Runnable {
@@ -390,32 +450,26 @@ public class AppComponent {
             int size = 0;
 
             while (true) {
-                try {
-                    //wait for a new packetIn message
-                    PacketContext packetContext = handleQueue.take();
+                //wait for a new packetIn message
 
-                    for (int i = 0; i < averageCount; i++) {
-                        DeviceId deviceId = deviceIds.get(RandomUtils.nextInt(deviceIds.size()));
 
-                        FlowRule flowRule = generatePofFlowEntry(deviceId, (byte) 0, 0, (short) 2);
+                for (int i = 0; i < averageCount; i++) {
+                    DeviceId deviceId = deviceIds.get(RandomUtils.nextInt(deviceIds.size()));
 
-                        rules.add(flowRule);
-                        size++;
-                    }
-                    //apply flow rules as a batch
-                    if(size >= batchSize) {
-                        flowRuleService.apply(rules.build());
+                    FlowRule flowRule = generatePofFlowEntry(deviceId, (byte) 0, 0, (short) 2);
 
-                        rules = FlowRuleOperations.builder();
-
-                        size = 0;
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    // interrupted, shutdown the thread
-                    log.info("Thread shutdown: {}", Thread.currentThread().getName());
-                    return;
+                    rules.add(flowRule);
+                    size++;
                 }
+                //apply flow rules as a batch
+                if(size >= batchSize) {
+                    flowRuleService.apply(rules.build());
+
+                    rules = FlowRuleOperations.builder();
+
+                    size = 0;
+                }
+                //PacketContext packetContext = handleQueue.take();
 
             }
         }
