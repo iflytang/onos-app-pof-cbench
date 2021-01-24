@@ -63,7 +63,13 @@ import org.onosproject.net.flow.criteria.Criterion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.*;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.BlockingDeque;
@@ -127,6 +133,10 @@ public class AppComponent {
      */
     private ExecutorService executorService;
 
+//    private Thread intProcessor;
+    private ExecutorService threadPool;
+    protected SocketINTProcessor socketINTProcessor = null;
+
 
     @Activate
     protected void activate() throws InterruptedException {
@@ -147,9 +157,9 @@ public class AppComponent {
             log.info("master for device: {} is {}", deviceId, master);
             if (Objects.equals(local, master)) {
                 List<Port> portList = deviceService.getPorts(deviceId);
-                log.info("begin enable ports of specific deviceId:" + deviceId.toString());
+                log.info("begin enable ports of specific deviceId: {}", deviceId.toString());
                 for (Port port: portList) {
-                    log.info("port in portList:" + port.toString());
+                    log.info("port in portList: {}", port.toString());
                     deviceService.changePortState(deviceId, port.number(), true);
                     /*if(!port.isEnabled()) {
                         log.info("begin enable ports:" + port.toString());
@@ -171,7 +181,7 @@ public class AppComponent {
         }
 
 //        executorService = Executors.newFixedThreadPool(2, Tools.groupedThreads("onos/cbench/pof/", "-%d", log));
-        executorService = Executors.newSingleThreadExecutor(Tools.groupedThreads("onos/cbench/packetin/handler", "1", log));
+//        executorService = Executors.newSingleThreadExecutor(Tools.groupedThreads("onos/cbench/packetin/handler", "1", log));
 
 //        executorService.submit(new FlowRuleInstaller(deviceIdList, AVERAGE_COUNT, BATCH_SIZE));
 //        executorService.submit(() -> {
@@ -182,8 +192,13 @@ public class AppComponent {
 //                }
 //            }
 //        });
-        log.info("flow rule installer started: {}", executorService);
-//
+//        log.info("flow rule installer started: {}", executorService);
+
+
+        threadPool = Executors.newCachedThreadPool();
+        socketINTProcessor = new SocketINTProcessor(threadPool);
+        threadPool.execute(socketINTProcessor);
+
 //
 //        log.info("Started");
     }
@@ -194,10 +209,13 @@ public class AppComponent {
         processor = null;
         //flowRuleService.removeFlowRulesById(appId);
 
-        if (executorService != null) {
-            log.info("flow rule installer shutdown: {}", executorService);
-            executorService.shutdown();
-        }
+
+//        if (executorService != null) {
+//            log.info("flow rule installer shutdown: {}", executorService);
+//            executorService.shutdown();
+//        }
+
+        threadPool.shutdown();
 
         log.info("Stopped");
     }
@@ -474,4 +492,223 @@ public class AppComponent {
             }
         }
     }
+
+    /* public class SocketServer */
+    private class SocketINTProcessor implements Runnable {
+        private static final String SERVER_ADDR = "192.168.109.215";
+        private static final int PORT = 2020;
+
+        int socket_num = 0;
+
+        private ExecutorService threadPool;
+
+        public SocketINTProcessor(ExecutorService threadPool) {
+            this.threadPool = threadPool;
+        }
+
+        @Override
+        public void run() {
+//        public void runThread() {
+            try {  // server
+                ServerSocket serverSocket = new ServerSocket(PORT);
+                log.info("server<{}> socket is waiting to be connected ...", SERVER_ADDR);
+                log.info("listening port is {}.", PORT);
+
+                Socket client = null;
+                InetAddress inetAddress = null;
+
+                String result_file = "/home/tsf/onos-app-pof-cbench/src/main/java/org/onosproject/pof/cbench/result_processing_throughput.txt";
+                File wrt_fd = null;
+                BufferedWriter buf_wrt = null;
+                try {
+                    wrt_fd = new File(result_file);
+                    wrt_fd.createNewFile();
+                    buf_wrt = new BufferedWriter(new FileWriter(wrt_fd, true));
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+                while (true) {
+                    // client connection
+                    client = serverSocket.accept();
+                    inetAddress = client.getInetAddress();
+
+//                    Thread serverThread = new Thread(new SocketServerThreadONOS(client, wrt_fd));
+//                    serverThread.start();
+
+                    threadPool.execute(new SocketServerThreadONOS(client, buf_wrt));
+
+//                    if (Thread.currentThread().isInterrupted()) {
+//                        break;
+//                    }
+
+                    // client statistics
+                    socket_num++;
+                    log.info("client<{}> connected! current connected_num: {}", inetAddress, socket_num);
+
+                }
+
+            } catch (IOException io) {
+                io.printStackTrace();
+            }
+        }
+    }
+
+    private class SocketServerThreadONOS implements Runnable {
+
+        private Socket client;
+
+        private BufferedWriter buf_wrt;
+
+        public SocketServerThreadONOS(Socket client, BufferedWriter buf_wrt) {
+            this.client = client;
+            this.buf_wrt = buf_wrt;
+            log.info("client: {}, wrt_fd: {}.", this.client, this.buf_wrt);
+        }
+
+        private Date start_time, end_time;
+
+        private int cnt = 0;
+
+        public int bytes2Int(byte[] arr, int k){
+            int value=0;
+            for(int i=0;i< 4;i++){
+                value|=((arr[k]&0xff))<<(4*i);
+                k++;
+            }
+            return value;
+        }
+
+        public float bytes2float(byte[] b, int index) {
+            int l;
+            l = b[index + 0];
+            l &= 0xff;
+            l |= ((long) b[index + 1] << 8);
+            l &= 0xffff;
+            l |= ((long) b[index + 2] << 16);
+            l &= 0xffffff;
+            l |= ((long) b[index + 3] << 24);
+            return Float.intBitsToFloat(l);
+        }
+
+        @Override
+        public void run() {
+            InetAddress inetAddress = null;
+
+            InputStream inputStream = null;   // receive data from client
+            InputStreamReader inputStreamReader = null;
+            BufferedReader bufferedReader = null;
+
+            OutputStream outputStream = null;  // send data to client
+            PrintWriter printWriter = null;
+
+//            log.info("run here 1");
+
+            try {
+//                log.info("run here 2");
+                inetAddress = client.getInetAddress();
+//                log.info("run here 3, inetAddress: {}.", inetAddress);
+
+                inputStream = client.getInputStream();
+//                inputStreamReader = new InputStreamReader(inputStream);
+//                bufferedReader = new BufferedReader(inputStreamReader);
+//                log.info("run here 4, inputStream: {}.", inputStream);
+
+                outputStream = client.getOutputStream();
+                printWriter = new PrintWriter(outputStream);
+
+//                log.info("run here 5");
+
+                /* record result. */
+//                buf_wrt = new BufferedWriter(new FileWriter(wrt_fd, true));
+
+//                log.info("run here 6, buf_wrt: {}", buf_wrt);
+
+                start_time = new Date();
+                log.info("start_time: {}, get_time: {} ms.", start_time, start_time.getTime());
+
+                String msg = null;
+
+                int int_byte_size = 4;
+                int data_num = 6;
+                byte[] receive = new byte[data_num * int_byte_size];
+
+                float[] recv_float_data = new float[data_num];
+                int[] recv_int_data = new int[data_num];
+
+                int i, j;
+
+                while (true) {
+
+                    /* RECEIVE DATA FROM CLIENT */
+
+                    int len = inputStream.read(receive, 0, receive.length);
+
+//                    log.info("server, from client< {}, cnt: {}" , inetAddress, cnt);
+
+                    for (i = 0, j = 0; i < len; i = i + int_byte_size, j++) {
+                        if (j < data_num) {   // first 'monitor_nodes' points
+                            recv_float_data[j] = bytes2float(receive, i);
+                            recv_int_data[j] = bytes2Int(receive, i);
+//                        System.out.println("recv_float_data: " + j + ", " + recv_float_data[j]);
+//                           log.info("recv_int_data: {}, {}", j, recv_int_data[j]);
+                        }
+                    }
+
+                    if (len < 0) {
+                        break;
+                    }
+
+                    cnt += 1;
+
+                    /* SEND DATA TO CLIENT */
+//                printWriter.write("Server: " + msg);
+//                printWriter.flush();
+
+                }
+                client.shutdownInput();   // close input stream
+
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {  // close socket resource
+                try {
+                    if (bufferedReader != null) {
+                        bufferedReader.close();
+                    }
+
+                    if (inputStream != null) {
+                        inputStream.close();
+                    }
+
+                    if (inputStreamReader != null) {
+                        inputStreamReader.close();
+                    }
+
+                    if (client != null) {
+                        client.close();
+                        SocketServer.socket_num--;
+                        log.info("in recv_thread, client<{}> disconnected! current connected_num: {}" , inetAddress, SocketServer.socket_num);
+                        end_time = new Date();
+                        log.info("start_time: {}, get_time: {} ms. end_time: {}, get_time: {} ms. delta_time: {} s, cnt: {}.\n",
+                                start_time, start_time.getTime(), end_time, end_time.getTime(),
+                                String.format("%.3f", (end_time.getTime() - start_time.getTime()) / 1000.0), cnt);
+
+                        SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd-HH:mm:ss");
+                        buf_wrt.write(df.format(start_time) + "\t" + start_time.getTime() + "\t"
+                                + df.format(end_time) + "\t" + end_time.getTime() + "\t"
+                                + String.format("%.3f", (end_time.getTime() - start_time.getTime()) / 1000.0) + "\t\n");
+                        buf_wrt.flush();
+
+                        cnt = 0;
+                    }
+
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+    }
+
+
 }
